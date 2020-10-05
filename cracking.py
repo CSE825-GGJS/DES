@@ -31,6 +31,8 @@ def main():
         for plausibility, block, key in p.imap_unordered(process, range(1 << 16)):
             if plausibility:
                 print(f"0x{key:016x} yields: {block}")
+                tmp_machine = DESMachine(key)
+                print(f"\tfull decryption yields: {tmp_machine.crypt_blocks(*blocks, encrypt=False)}")
 
 
 if __name__ == '__main__':
