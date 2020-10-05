@@ -130,7 +130,7 @@ def permute_int(n: int, table: Sequence[int], bit_length: int, offset: int = 1) 
 def s_box(table: int, s: int) -> int:
     y = (s >> 1) % 16
     x = (s % 2) + ((s >> 5) << 1)
-    print(f"Looking up {table}, {x}, {y}")
+    # print(f"Looking up {table}, {x}, {y}")
     return s_box_table[table][x][y]
 
 
