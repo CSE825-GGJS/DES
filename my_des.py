@@ -1,6 +1,16 @@
 """DES algorithm implementation
 Gabe Appleton, Shashank Mohan, Gregory Hess, and Julia Zheng
 """
+
+import string
+
+def is_hex(s):
+    try:
+        int(s, 16)
+    except ValueError:
+        return False
+    return len(s) % 2 == 0
+   
 def bit_array_to_string(bitarray): 
     chars = []
     for b in range(len(bitarray) // 8):
@@ -222,12 +232,20 @@ class des():
         return [x^y for x,y in zip(t1,t2)]
 if __name__ == '__main__':
     key = bytearray.fromhex("133457799BBCDFF1")
-    data_text= bytearray.fromhex("0123456789ABCDEF")
+    my_string = "somewhereovertherainbowwayuphigh"
+    if is_hex(my_string):
+        data_text= bytearray.fromhex(my_string)
+    else:
+        my_hex = ''.join(hex(ord(c))[2:] for c in my_string)
+        print(my_hex)
+        data_text= bytearray.fromhex(my_hex)
     right_subkey = des()
     ciphered = right_subkey.encrypt(key,data_text)
     decrypted = right_subkey.decrypt(key,ciphered)
-    print("Ciphered: " +" ".join(hex(ord(x))[2:].zfill(2) for x in ciphered))
-    print("Deciphered: "+ " ".join(hex(ord(x))[2:].zfill(2) for x in decrypted))
+    print("Ciphered: " +ciphered)
+    print("Deciphered: "+decrypted)
+    print("Ciphered (hex): " +" ".join(hex(ord(x))[2:].zfill(2) for x in ciphered))
+    print("Deciphered (hex): "+ " ".join(hex(ord(x))[2:].zfill(2) for x in decrypted))
     if "".join(hex(ord(x))[2:].zfill(2) for x in ciphered) == ''.join('{:02x}'.format(x) for x in bytearray.fromhex("85E813540F0AB405")):
         print("WOOT YOU MATCH YAY GOOD JOB")
     else:
