@@ -88,7 +88,7 @@ s_box_table = (
 )
 
 
-def int_to_bits(n: int, bit_length: int) -> Sequence[int]:
+def int_to_bits(n: int, bit_length: int) -> Sequence[bool]:
     """Convert an integer to a sequence of big-endian bits.
 
     The bit length of your field must be given to get an output of the correct size.
@@ -103,7 +103,7 @@ def int_to_bits(n: int, bit_length: int) -> Sequence[int]:
     return ret
 
 
-def bits_to_int(block: Sequence[int]) -> int:
+def bits_to_int(block: Sequence[bool]) -> int:
     """Convert a sequence of big-endian bits to an integer."""
     return sum(x << idx for idx, x in enumerate(reversed(block)))
     # goes over each bit from least significant to most, then shifts their value out by their index
@@ -112,7 +112,7 @@ def bits_to_int(block: Sequence[int]) -> int:
 def circular_shift(n: int, i: int, bit_length: int) -> int:
     """Move the most significant i bits to the least significant end."""
     block = int_to_bits(n, bit_length)
-    block = block[i:] + block[:i]
+    block = tuple(chain(block[i:], block[:i]))
     return bits_to_int(block)
 
 
@@ -181,5 +181,5 @@ class DESMachine:
     def crypt_blocks(self, *blocks: bytes, encrypt=True) -> bytes:
         """Encrypt a group of up-to-8-byte blocks or a longer bytestream."""
         if len(blocks) == 1 and len(blocks[0]) > 8:
-            blocks = [blocks[0][x:8+x] for x in range(0, len(blocks[0]), 8)]
+            blocks = tuple(blocks[0][x:8+x] for x in range(0, len(blocks[0]), 8))
         return b''.join(self.crypt_block(block, encrypt=encrypt) for block in blocks)
