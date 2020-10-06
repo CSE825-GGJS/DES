@@ -1,0 +1,4 @@
+0xaaaa000000000000 yields: b'Iloveyou'
+0xaaab000000000000 yields: b'Iloveyou'
+0xabaa000000000000 yields: b'Iloveyou'
+0xabab000000000000 yields: b'Iloveyou'
