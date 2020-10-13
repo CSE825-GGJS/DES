@@ -1,6 +1,6 @@
 from itertools import chain
 from os import urandom
-from typing import Sequence, Tuple, Union
+from typing import cast, List, Sequence, Tuple, Union
 
 key_permutation = (
     57, 49, 41, 33, 25, 17, 9, 1, 58, 50, 42, 34, 26, 18, 10, 2, 59, 51, 43, 35, 27, 19, 11, 3, 60, 52, 44, 36, 63, 55,
@@ -174,18 +174,25 @@ def shuffle(l_block: int, r_block: int, subkey: int) -> Tuple[int, int]:
 class DESMachine:
     def __init__(
         self,
-        key: int,
+        key: Union[int, Sequence[int]],
         initialization_vector: int = 0,
         default_mode: int = ELECTRONIC_CODE_BOOK
     ):
-        key = int(key)
-        if key.bit_length() > 64:
+        if not isinstance(key, int):
+            keys = key
+        else:
+            keys = (key, key, key)
+        if any(k.bit_length() > 64 for k in keys):
             raise ValueError("Key must be 64 bits or less")
-        self.__key = key = permute_int(key, key_permutation, 64)  # spits out 56 bits
-        key_c = key >> 28
-        key_d = key % (1 << 28)
-        subkeys = tuple((circular_shift(key_c, x, 28) << 28) + circular_shift(key_d, x, 28) for x in cumulative_shifts)
-        self.__subkeys = tuple(permute_int(subkey, subkey_permutation, 56) for subkey in subkeys)
+        keys = tuple(permute_int(k, key_permutation, 64) for k in keys)  # spits out 56 bits
+        keys_c = tuple(k >> 28 for k in keys)
+        keys_d = tuple(k % (1 << 28) for k in keys)
+        self.__subkeys = tuple(
+            tuple(
+                permute_int((circular_shift(key_c, x, 28) << 28) + circular_shift(key_d, x, 28), subkey_permutation, 56)
+                for x in cumulative_shifts)
+            for key_c, key_d in zip(keys_c, keys_d)
+        )
         self.reset(initialization_vector=initialization_vector, default_mode=default_mode)
 
     def encrypt(self, *args, mode=NONE_GIVEN) -> bytes:
@@ -196,20 +203,26 @@ class DESMachine:
 
     def reset(
         self,
-        initialization_vector: Union[int, bytes] = b'\00' * 8,
+        initialization_vector: Union[int, bytes, Sequence[Union[int, bytes]]] = (b'\00' * 8, ) * 3,
         default_mode: int = ELECTRONIC_CODE_BOOK
     ) -> None:
-        if isinstance(initialization_vector, int):
-            initialization_vector = initialization_vector.to_bytes(8, 'big')
+        if isinstance(initialization_vector, (int, bytes)):
+            initialization_vector = [initialization_vector] * 3
+        else:
+            initialization_vector = list(initialization_vector)
+        for idx, iv in enumerate(initialization_vector):
+            if isinstance(iv, int):
+                initialization_vector[idx] = iv.to_bytes(8, 'big')
         self.default_mode = default_mode
-        self.last_block_encrypt = initialization_vector
-        self.last_block_decrypt = initialization_vector
+        self.last_block_encrypt: List[bytes] = cast(List[bytes], initialization_vector)
+        self.last_block_decrypt: List[bytes] = cast(List[bytes], initialization_vector).copy()
 
     def crypt_block(
         self,
         block: bytes,
         action: int = ENCRYPT,
-        mode: int = NONE_GIVEN
+        mode: int = NONE_GIVEN,
+        key_index: int = 0
     ) -> bytes:
         """Encrypts a block of up to 8 bytes in block cipher mode."""
         if action not in (ENCRYPT, DECRYPT):
@@ -225,13 +238,16 @@ class DESMachine:
                     self.crypt_block(
                         block,
                         action=action,
-                        mode=new_mode
+                        mode=new_mode,
+                        key_index=0
                     ),
-                    action=action,
-                    mode=new_mode
+                    action=not action,
+                    mode=new_mode,
+                    key_index=1
                 ),
                 action=action,
-                mode=new_mode
+                mode=new_mode,
+                key_index=2
             )
 
         if (mode & NOT_TRIPLE_BITMASK) in (CIPHER_FEEDBACK, OUTPUT_FEEDBACK):
@@ -243,21 +259,21 @@ class DESMachine:
 
         if (mode & NOT_TRIPLE_BITMASK) == CIPHERBLOCK_CHAINING:
             if action == ENCRYPT:
-                block = bytes(x ^ y for x, y in zip(block, self.last_block_encrypt))
+                block = bytes(x ^ y for x, y in zip(block, self.last_block_encrypt[key_index]))
 
         data = permute_int(int.from_bytes(block, 'big'), data_permutation, 64)
         l_block = data >> 32  # to get the most significant half, shift right
         r_block = data % (1 << 32)  # erase the left half
-        for subkey in (self.__subkeys if (action == ENCRYPT) else reversed(self.__subkeys)):
+        for subkey in (self.__subkeys[key_index] if (action == ENCRYPT) else reversed(self.__subkeys[key_index])):
             l_block, r_block = shuffle(l_block, r_block, subkey)
         return_block = permute_int((r_block << 32) + l_block, inverse_data_permutation, 64).to_bytes(8, 'big')
 
         if (mode & NOT_TRIPLE_BITMASK) == CIPHERBLOCK_CHAINING:
             if action == ENCRYPT:
-                self.last_block_encrypt = return_block
+                self.last_block_encrypt[key_index] = return_block
             else:
-                tmp = bytes(x ^ y for x, y in zip(return_block, self.last_block_decrypt))
-                self.last_block_decrypt = block
+                tmp = bytes(x ^ y for x, y in zip(return_block, self.last_block_decrypt[key_index]))
+                self.last_block_decrypt[key_index] = block
                 return tmp
 
         return return_block
