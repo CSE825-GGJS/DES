@@ -1,6 +1,6 @@
 from itertools import chain
 from os import urandom
-from typing import Sequence, Tuple
+from typing import Sequence, Tuple, Union
 
 key_permutation = (
     57, 49, 41, 33, 25, 17, 9, 1, 58, 50, 42, 34, 26, 18, 10, 2, 59, 51, 43, 35, 27, 19, 11, 3, 60, 52, 44, 36, 63, 55,
@@ -87,6 +87,25 @@ s_box_table = (
     ),
 )
 
+# Constants section
+ENCRYPT = 0
+DECRYPT = 1
+
+NONE_GIVEN = -1
+
+ELECTRONIC_CODE_BOOK = 0b000
+CIPHERBLOCK_CHAINING = 0b001
+CIPHER_FEEDBACK = 0b010
+OUTPUT_FEEDBACK = 0b011
+
+TRIPLE = 0b100
+NOT_TRIPLE_BITMASK = TRIPLE - 1
+
+TRIPLE_ECB = TRIPLE | ELECTRONIC_CODE_BOOK
+TRIPLE_CBC = TRIPLE | CIPHERBLOCK_CHAINING
+TRIPLE_CFB = TRIPLE | CIPHER_FEEDBACK
+TRIPLE_OFB = TRIPLE | OUTPUT_FEEDBACK
+
 
 def int_to_bits(n: int, bit_length: int) -> Sequence[bool]:
     """Convert an integer to a sequence of big-endian bits.
@@ -153,7 +172,12 @@ def shuffle(l_block: int, r_block: int, subkey: int) -> Tuple[int, int]:
 
 
 class DESMachine:
-    def __init__(self, key: int):
+    def __init__(
+        self,
+        key: int,
+        initialization_vector: int = 0,
+        default_mode: int = ELECTRONIC_CODE_BOOK
+    ):
         key = int(key)
         if key.bit_length() > 64:
             raise ValueError("Key must be 64 bits or less")
@@ -162,24 +186,88 @@ class DESMachine:
         key_d = key % (1 << 28)
         subkeys = tuple((circular_shift(key_c, x, 28) << 28) + circular_shift(key_d, x, 28) for x in cumulative_shifts)
         self.__subkeys = tuple(permute_int(subkey, subkey_permutation, 56) for subkey in subkeys)
+        self.reset(initialization_vector=initialization_vector, default_mode=default_mode)
 
-    def crypt_block(self, block: bytes, encrypt=True) -> bytes:
+    def encrypt(self, *args, mode=NONE_GIVEN) -> bytes:
+        return self.crypt_blocks(*args, action=ENCRYPT, mode=mode)
+
+    def decrypt(self, *args, mode=NONE_GIVEN) -> bytes:
+        return self.crypt_blocks(*args, action=DECRYPT, mode=mode)
+
+    def reset(
+        self,
+        initialization_vector: Union[int, bytes] = b'\00' * 8,
+        default_mode: int = ELECTRONIC_CODE_BOOK
+    ) -> None:
+        if isinstance(initialization_vector, int):
+            initialization_vector = initialization_vector.to_bytes(8, 'big')
+        self.default_mode = default_mode
+        self.last_block_encrypt = initialization_vector
+        self.last_block_decrypt = initialization_vector
+
+    def crypt_block(
+        self,
+        block: bytes,
+        action: int = ENCRYPT,
+        mode: int = NONE_GIVEN
+    ) -> bytes:
         """Encrypts a block of up to 8 bytes in block cipher mode."""
+        if action not in (ENCRYPT, DECRYPT):
+            raise ValueError("Unknown action")
+
+        if mode == NONE_GIVEN:
+            mode = self.default_mode
+
+        if mode >> 2:
+            new_mode = mode & NOT_TRIPLE_BITMASK
+            return self.crypt_block(
+                self.crypt_block(
+                    self.crypt_block(
+                        block,
+                        action=action,
+                        mode=new_mode
+                    ),
+                    action=action,
+                    mode=new_mode
+                ),
+                action=action,
+                mode=new_mode
+            )
+
+        if (mode & NOT_TRIPLE_BITMASK) in (CIPHER_FEEDBACK, OUTPUT_FEEDBACK):
+            raise NotImplementedError()
+
         if len(block) != 8:  # then we need to pad this
-            block = block + (b'\x00' * (8 - len(block)))
+            chars = 8 - len(block)
+            return b'\00' * chars
+
+        if (mode & NOT_TRIPLE_BITMASK) == CIPHERBLOCK_CHAINING:
+            if action == ENCRYPT:
+                block = bytes(x ^ y for x, y in zip(block, self.last_block_encrypt))
+
         data = permute_int(int.from_bytes(block, 'big'), data_permutation, 64)
         l_block = data >> 32  # to get the most significant half, shift right
         r_block = data % (1 << 32)  # erase the left half
-        for subkey in (self.__subkeys if encrypt else reversed(self.__subkeys)):
+        for subkey in (self.__subkeys if (action == ENCRYPT) else reversed(self.__subkeys)):
             l_block, r_block = shuffle(l_block, r_block, subkey)
-        return permute_int((r_block << 32) + l_block, inverse_data_permutation, 64).to_bytes(8, 'big')
+        return_block = permute_int((r_block << 32) + l_block, inverse_data_permutation, 64).to_bytes(8, 'big')
+
+        if (mode & NOT_TRIPLE_BITMASK) == CIPHERBLOCK_CHAINING:
+            if action == ENCRYPT:
+                self.last_block_encrypt = return_block
+            else:
+                tmp = bytes(x ^ y for x, y in zip(return_block, self.last_block_decrypt))
+                self.last_block_decrypt = block
+                return tmp
+
+        return return_block
 
     def pad_random(self, blocks: int) -> bytes:
         """Encrypt a block of random bytes."""
         return b''.join(self.crypt_block(urandom(8)) for _ in range(blocks))
 
-    def crypt_blocks(self, *blocks: bytes, encrypt=True) -> bytes:
+    def crypt_blocks(self, *blocks: bytes, **kwargs) -> bytes:
         """Encrypt a group of up-to-8-byte blocks or a longer bytestream."""
         if len(blocks) == 1 and len(blocks[0]) > 8:
-            blocks = tuple(blocks[0][x:8+x] for x in range(0, len(blocks[0]), 8))
-        return b''.join(self.crypt_block(block, encrypt=encrypt) for block in blocks)
+            blocks = tuple(blocks[0][x:8 + x] for x in range(0, len(blocks[0]), 8))
+        return b''.join(self.crypt_block(block, **kwargs) for block in blocks)
